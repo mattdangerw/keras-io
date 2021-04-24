@@ -262,7 +262,6 @@ the model to *generalize* well to unseen feature combinations.
 """
 
 
-from tensorflow.keras.layers.experimental.preprocessing import CategoryEncoding
 from tensorflow.keras.layers.experimental.preprocessing import StringLookup
 
 
@@ -274,25 +273,25 @@ def encode_inputs(inputs, use_embedding=False):
             # Create a lookup to convert string values to an integer indices.
             # Since we are not using a mask token nor expecting any out of vocabulary
             # (oov) token, we set mask_token to None and  num_oov_indices to 0.
-            index = StringLookup(
-                vocabulary=vocabulary, mask_token=None, num_oov_indices=0
+            lookup = StringLookup(
+                vocabulary=vocabulary,
+                mask_token=None,
+                num_oov_indices=0,
+                output_mode="int" if use_embedding else "binary",
             )
-            # Convert the string input values into integer indices.
-            value_index = index(inputs[feature_name])
             if use_embedding:
+                # Convert the string input values into integer indices.
+                encoded_feature = lookup(inputs[feature_name])
                 embedding_dims = int(math.sqrt(len(vocabulary)))
                 # Create an embedding layer with the specified dimensions.
-                embedding_ecoder = layers.Embedding(
+                embedding = layers.Embedding(
                     input_dim=len(vocabulary), output_dim=embedding_dims
                 )
                 # Convert the index values to embedding representations.
-                encoded_feature = embedding_ecoder(value_index)
+                encoded_feature = embedding(encoded_feature)
             else:
-                # Create a one-hot encoder.
-                onehot_encoder = CategoryEncoding(output_mode="binary")
-                onehot_encoder.adapt(index(vocabulary))
-                # Convert the index values to a one-hot representation.
-                encoded_feature = onehot_encoder(value_index)
+                # Convert the string input values into a one hot encoding.
+                encoded_feature = lookup(tf.expand_dims(inputs[feature_name], -1))
         else:
             # Use the numerical features as-is.
             encoded_feature = tf.expand_dims(inputs[feature_name], -1)
