@@ -511,6 +511,8 @@ class KerasIO:
                     "missing {{toc}} tag." % (template_path,)
                 )
             template = template.replace("{{toc}}", toc)
+        if "keras_nlp/" in path_stack:
+            template = render_keras_nlp_tags(template)
         source_path = Path(self.md_sources_dir) / Path(*path_stack)
         if path.endswith("/"):
             md_source_path = source_path / "index.md"
@@ -1035,6 +1037,20 @@ def generate_md_toc(entries, url, depth=2):
                 )
             generated += "\n"
     return generated
+
+
+def render_keras_nlp_tags(template):
+    if "{{backbone_presets_table}}" in template:
+        # Import KerasNLP and do some stuff.
+        template = template.replace(
+            "{{backbone_presets_table}}", "HELLO, WORLD!"
+        )
+    if "{{classifier_presets_table}}" in template:
+        # Import KerasNLP and do some stuff.
+        template = template.replace(
+            "{{classifier_presets_table}}", "HELLO AGAIN, WORLD!"
+        )
+    return template
 
 
 def get_working_dir(arg):
