@@ -30,15 +30,17 @@ visual reference for the complexity of the material:
 
 import json
 import math
+
+import numpy as np
+import keras
 import keras_cv
+from keras import ops
+from keras import losses
+from keras import optimizers
+from keras.optimizers import schedules
+from keras import metrics
 import tensorflow as tf
 import tensorflow_datasets as tfds
-import keras
-from keras import losses
-import numpy as np
-from keras import optimizers
-from tensorflow.keras.optimizers import schedules
-from keras import metrics
 
 
 """
@@ -77,11 +79,11 @@ semantic segmentation.
 Now that our classifier is built, let's apply it to this cute cat picture!
 """
 
-filepath = tf.keras.utils.get_file(origin="https://i.imgur.com/9i63gLN.jpg")
+filepath = keras.utils.get_file(origin="https://i.imgur.com/9i63gLN.jpg")
 image = keras.utils.load_img(filepath)
 image = np.array(image)
 keras_cv.visualization.plot_image_gallery(
-    [image], rows=1, cols=1, value_range=(0, 255), show=True, scale=4
+    image[None, ...], rows=1, cols=1, value_range=(0, 255), show=True, scale=4
 )
 
 """
@@ -93,8 +95,8 @@ predictions = classifier.predict(np.expand_dims(image, axis=0))
 Predictions come in the form of softmax-ed category rankings.
 We can find the index of the top classes using a simple argsort function:
 """
-top_classes = predictions[0].argsort(axis=-1)
 
+top_classes = predictions[0].argsort(axis=-1)
 
 """
 In order to decode the class mappings, we can construct a mapping from
@@ -151,12 +153,12 @@ num_classes = dataset_info.features["label"].num_classes
 resizing = keras_cv.layers.Resizing(
     IMAGE_SIZE[0], IMAGE_SIZE[1], crop_to_aspect_ratio=True
 )
+encoder = keras.layers.CategoryEncoding(num_classes, "one_hot", dtype="int32")
 
 
 def preprocess_inputs(image, label):
-    image = tf.cast(image, tf.float32)
     # Staticly resize images as we only iterate the dataset once.
-    return resizing(image), tf.one_hot(label, num_classes)
+    return resizing(image), encoder(label)
 
 
 # Shuffle the dataset to increase diversity of batches.
@@ -404,23 +406,24 @@ keras_cv.visualization.plot_image_gallery(
 )
 
 """
-While this tackles the problem reasonably well, it can cause the classifier to
-develop responses to borders between features and black pixel areas caused by
-the cutout.
+While this tackles the problem reasonably well, it can cause the classifier
+to develop responses to borders between features and black pixel areas caused
+by the cutout.
 
 [`CutMix`](https://arxiv.org/abs/1905.04899) solves the same issue by using
 a more complex (and more effective) technique.
 Instead of replacing the cut-out areas with black pixels, `CutMix` replaces
 these regions with regions of other images sampled from within your training
 set!
-Following this replacement, the image's classification label is updated to be a
-blend of the original and mixed image's class label.
+Following this replacement, the image's classification label is updated to be
+a blend of the original and mixed image's class label.
 
 What does this look like in practice?  Let's check it out:
 """
+
 cut_mix = keras_cv.layers.CutMix()
 # CutMix needs to modify both images and labels
-inputs = {"images": image_batch, "labels": label_batch}
+inputs = {"images": image_batch, "labels": tf.cast(label_batch, "float32")}
 
 keras_cv.visualization.plot_image_gallery(
     cut_mix(inputs)["images"],
@@ -440,14 +443,15 @@ it is not well-understood why such improvement occurs... but
 a little alchemy never hurt anyone!
 
 `MixUp()` works by sampling two images from a batch, then proceeding to
-literally blend together their pixel intensities as well as their classification
-labels.
+literally blend together their pixel intensities as well as their
+classification labels.
 
 Let's see it in action:
 """
+
 mix_up = keras_cv.layers.MixUp()
 # MixUp needs to modify both images and labels
-inputs = {"images": image_batch, "labels": label_batch}
+inputs = {"images": image_batch, "labels": tf.cast(label_batch, "float32")}
 
 keras_cv.visualization.plot_image_gallery(
     mix_up(inputs)["images"],
@@ -456,6 +460,7 @@ keras_cv.visualization.plot_image_gallery(
     value_range=(0, 255),
     show=True,
 )
+
 """
 If you look closely, you'll see that the images have been blended together.
 
@@ -471,7 +476,7 @@ augmenters += [cut_mix_or_mix_up]
 Now let's apply our final augmenter to the training data:
 """
 
-augmenter = keras.Sequential(augmenters)
+augmenter = keras_cv.layers.Augmenter(augmenters)
 train_ds = train_ds.map(augmenter, num_parallel_calls=tf.data.AUTOTUNE)
 
 image_batch = next(iter(train_ds.take(1)))["images"]
@@ -548,23 +553,26 @@ def lr_warmup_cosine_decay(
         * target_lr
         * (
             1
-            + tf.cos(
-                tf.constant(math.pi)
-                * tf.cast(global_step - warmup_steps - hold, tf.float32)
-                / float(total_steps - warmup_steps - hold)
+            + ops.cos(
+                math.pi
+                * ops.convert_to_tensor(
+                    global_step - warmup_steps - hold, dtype="float32"
+                )
+                / ops.convert_to_tensor(
+                    total_steps - warmup_steps - hold, dtype="float32"
+                )
             )
         )
     )
 
-    warmup_lr = tf.cast(target_lr * (global_step / warmup_steps), tf.float32)
-    target_lr = tf.cast(target_lr, tf.float32)
+    warmup_lr = target_lr * (global_step / warmup_steps)
 
     if hold > 0:
-        learning_rate = tf.where(
+        learning_rate = ops.where(
             global_step > warmup_steps + hold, learning_rate, target_lr
         )
 
-    learning_rate = tf.where(global_step < warmup_steps, warmup_lr, learning_rate)
+    learning_rate = ops.where(global_step < warmup_steps, warmup_lr, learning_rate)
     return learning_rate
 
 
@@ -587,7 +595,7 @@ class WarmUpCosineDecay(schedules.LearningRateSchedule):
             hold=self.hold,
         )
 
-        return tf.where(step > self.total_steps, 0.0, lr, name="learning_rate")
+        return ops.where(step > self.total_steps, 0.0, lr)
 
 
 """
@@ -610,7 +618,7 @@ schedule = WarmUpCosineDecay(
     hold=hold_steps,
 )
 optimizer = optimizers.SGD(
-    decay=5e-4,
+    weight_decay=5e-4,
     learning_rate=schedule,
     momentum=0.9,
 )
@@ -621,7 +629,7 @@ At long last, we can now build our model and call `fit()`!
 Note that this preset does not come with any pretrained weights.
 """
 
-backbone = keras_cv.models.EfficientNetV2B1Backbone()
+backbone = keras_cv.models.ResNet18V2Backbone()
 model = keras.Sequential(
     [
         backbone,
